@@ -19,7 +19,6 @@ import logging
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.DEBUG)
 
-
 # 取引時間を秒に変換する関数
 def duration_seconds(duration: str) -> int:
     if duration == constants.DURATION_1M:
@@ -31,7 +30,6 @@ def duration_seconds(duration: str) -> int:
     else:
         return 0
 
-
 # シグナル検出関数
 def determine_trade_action(df, optimized_trade_params):
     if optimized_trade_params is None:
@@ -40,62 +38,56 @@ def determine_trade_action(df, optimized_trade_params):
 
     params = optimized_trade_params
     buy_signal, sell_signal = False, False
+    signal_strength = 0
 
-    # EMAシグナルの生成
+    # EMAシグナル
     if params.ema_enable:
         ema_values_1 = talib.EMA(np.array(df.closes), params.ema_period_1)
         ema_values_2 = talib.EMA(np.array(df.closes), params.ema_period_2)
-
-        # シグナル生成の条件を確認
         if len(ema_values_1) >= 2 and len(ema_values_2) >= 2:
-            buy_signal = ema_values_1[-2] < ema_values_2[-2] and ema_values_1[-1] >= ema_values_2[-1]
-            sell_signal = ema_values_1[-2] > ema_values_2[-2] and ema_values_1[-1] <= ema_values_2[-1]
+            ema_diff = ema_values_2[-1] - ema_values_1[-1]
+            buy_signal = ema_values_1[-2] < ema_values_2[-2] and ema_values_1[-1] >= ema_values_2[-1] and ema_diff > 0.05
+            sell_signal = ema_values_1[-2] > ema_values_2[-2] and ema_values_1[-1] <= ema_values_2[-1] and ema_diff > 0.05
+            signal_strength += 1 if buy_signal or sell_signal else 0
 
-        # EMAシグナルのログ
         logger.debug(f"EMA Period 1: {ema_values_1[-2:]}, EMA Period 2: {ema_values_2[-2:]}")
         logger.debug(f"EMA Buy Signal: {buy_signal}, EMA Sell Signal: {sell_signal}")
 
     # ボリンジャーバンドのシグナル生成
     if params.bb_enable:
-        upper_band, middle_band, lower_band = talib.BBANDS(np.array(df.closes), timeperiod=params.bb_n,
-                                                           nbdevup=params.bb_k, nbdevdn=params.bb_k)
+        upper_band, middle_band, lower_band = talib.BBANDS(np.array(df.closes), timeperiod=params.bb_n, nbdevup=params.bb_k, nbdevdn=params.bb_k)
         last_close = df.closes[-1]
-
         if last_close > upper_band[-1]:
             sell_signal = True
+            signal_strength += 1
         elif last_close < lower_band[-1]:
             buy_signal = True
+            signal_strength += 1
 
-        # ボリンジャーバンドのログ
-        logger.debug(
-            f"Bollinger Bands - Last Close: {last_close}, Upper Band: {upper_band[-1]}, Lower Band: {lower_band[-1]}")
+        logger.debug(f"Bollinger Bands - Last Close: {last_close}, Upper Band: {upper_band[-1]}, Lower Band: {lower_band[-1]}")
         logger.debug(f"Bollinger Bands Buy Signal: {buy_signal}, Sell Signal: {sell_signal}")
 
-    # MACDのシグナル生成
+    # MACDシグナル
     if params.macd_enable:
-        macd, macdsignal, macdhist = talib.MACD(np.array(df.closes), fastperiod=params.macd_fast_period,
-                                                slowperiod=params.macd_slow_period,
-                                                signalperiod=params.macd_signal_period)
-
+        macd, macdsignal, macdhist = talib.MACD(np.array(df.closes), fastperiod=params.macd_fast_period, slowperiod=params.macd_slow_period, signalperiod=params.macd_signal_period)
         if len(macd) >= 2 and len(macdsignal) >= 2:
             buy_signal = macd[-1] > macdsignal[-1] and macd[-2] <= macdsignal[-2]
             sell_signal = macd[-1] < macdsignal[-1] and macd[-2] >= macdsignal[-2]
+            signal_strength += 1 if buy_signal or sell_signal else 0
 
-        # MACDシグナルのログ
         logger.debug(f"MACD: {macd[-2:]}, MACD Signal: {macdsignal[-2:]}")
         logger.debug(f"MACD Buy Signal: {buy_signal}, MACD Sell Signal: {sell_signal}")
 
-    # シグナルが生成されたかどうかを確認
-    if buy_signal:
-        logger.info("Buy signal generated")
-        return "BUY"
-    elif sell_signal:
-        logger.info("Sell signal generated")
-        return "SELL"
+    if signal_strength >= 2:  # シグナルが強い場合のみ取引
+        if buy_signal:
+            logger.info("Buy signal generated")
+            return "BUY"
+        elif sell_signal:
+            logger.info("Sell signal generated")
+            return "SELL"
     else:
-        logger.debug("No trading signal detected")
+        logger.debug("No strong trading signal detected")
         return None
-
 
 # 取引実行関数
 def execute_trade_action(action, candle, ai_instance):
@@ -105,7 +97,6 @@ def execute_trade_action(action, candle, ai_instance):
     elif action == "SELL":
         logger.info("Executing Sell Order")
         ai_instance.sell(candle)
-
 
 # AIクラスの定義
 class AI(object):
