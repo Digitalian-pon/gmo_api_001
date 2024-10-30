@@ -5,7 +5,6 @@ from app.models.candle import factory_candle_class
 from app.models.dfcandle import DataFrameCandle
 from app.models.events import SignalEvents
 from gmocoin.gmocoin import APIClient
-from tradingalgo.algo import ichimoku_cloud
 import constants
 import settings
 import requests
