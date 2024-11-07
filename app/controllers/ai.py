@@ -144,102 +144,99 @@ class AI(object):
         df = DataFrameCandle(self.product_code, self.duration)
         df.set_all_candles(self.past_period)
         if df.candles:
+            self.optimized_trade_params = df.optimize_params()
+        if self.optimized_trade_params is not None:
+            logger.info(f'action=update_optimize_params params={self.optimized_trade_params.__dict__}')
+        else:
+            logger.warning("No optimized trade parameters found after update.")
 
-::contentReference[oaicite:0]
-{index = 0}
-self.optimized_trade_params = df.optimize_params()
-if self.optimized_trade_params is not None:
-    logger.info(f'action=update_optimize_params params={self.optimized_trade_params.__dict__}')
-else:
-    logger.warning("No optimized trade parameters found after update.")
-
-if is_continue and self.optimized_trade_params is None:
-    time.sleep(10 * duration_seconds(self.duration))
-    self.update_optimize_params(is_continue)
+        if is_continue and self.optimized_trade_params is None:
+            time.sleep(10 * duration_seconds(self.duration))
+            self.update_optimize_params(is_continue)
 
 
-def create_headers(self, method, path, body):
-    timestamp = str(int(time.time() * 1000))
-    text = timestamp + method + path + body
-    sign = hmac.new(settings.api_secret.encode(), text.encode(), hashlib.sha256).hexdigest()
-    return {
-        "API-KEY": settings.api_key,
-        "API-TIMESTAMP": timestamp,
-        "API-SIGN": sign,
-        "Content-Type": "application/json"
-    }
+    def create_headers(self, method, path, body):
+        timestamp = str(int(time.time() * 1000))
+        text = timestamp + method + path + body
+        sign = hmac.new(settings.api_secret.encode(), text.encode(), hashlib.sha256).hexdigest()
+        return {
+            "API-KEY": settings.api_key,
+            "API-TIMESTAMP": timestamp,
+            "API-SIGN": sign,
+            "Content-Type": "application/json"
+        }
 
 
-def buy(self, candle):
-    if self.back_test:
-        could_buy = self.signal_events.buy(self.product_code, candle.time, candle.close, 1.0, save=False)
+    def buy(self, candle):
+        if self.back_test:
+            could_buy = self.signal_events.buy(self.product_code, candle.time, candle.close, 1.0, save=False)
+            return could_buy
+
+        if self.start_trade > candle.time:
+            logger.warning('action=buy status=false error=old_time')
+            return False
+
+        balance = self.API.get_balance()
+        if not balance:
+            logger.error('Failed to retrieve balance.')
+            return False
+
+        units = int(balance['available'] * self.use_percent)
+        req_body = json.dumps({
+            "symbol": self.product_code,
+            "side": "BUY",
+            "executionType": "LIMIT",
+            "size": str(units),
+            "price": candle.close
+        })
+
+        path = "/v1/order"
+        headers = self.create_headers("POST", path, req_body)
+        res = requests.post(settings.api_url + path, headers=headers, data=req_body)
+        trade = res.json()
+
+        logger.info(f'Buy order response: {trade}')
+        could_buy = self.signal_events.buy(self.product_code, candle.time, candle.close, units, save=True)
         return could_buy
 
-    if self.start_trade > candle.time:
-        logger.warning('action=buy status=false error=old_time')
-        return False
 
-    balance = self.API.get_balance()
-    if not balance:
-        logger.error('Failed to retrieve balance.')
-        return False
+    def sell(self, candle):
+        if self.back_test:
+            could_sell = self.signal_events.sell(self.product_code, candle.time, candle.close, 1.0, save=False)
+            return could_sell
 
-    units = int(balance['available'] * self.use_percent)
-    req_body = json.dumps({
-        "symbol": self.product_code,
-        "side": "BUY",
-        "executionType": "LIMIT",
-        "size": str(units),
-        "price": candle.close
-    })
+        if self.start_trade > candle.time:
+            logger.warning('action=sell status=false error=old_time')
+            return False
 
-    path = "/v1/order"
-    headers = self.create_headers("POST", path, req_body)
-    res = requests.post(settings.api_url + path, headers=headers, data=req_body)
-    trade = res.json()
+        trades = self.API.get_open_trade()
+        if not trades:
+            logger.error('Failed to fetch open trades.')
+            return False
 
-    logger.info(f'Buy order response: {trade}')
-    could_buy = self.signal_events.buy(self.product_code, candle.time, candle.close, units, save=True)
-    return could_buy
+        sum_price = 0
+        units = 0
+        for trade in trades:
+            closed_trade = self.API.trade_close(trade['trade_id'])
+            sum_price += closed_trade['price'] * abs(closed_trade['units'])
+            units += abs(closed_trade['units'])
 
-
-def sell(self, candle):
-    if self.back_test:
-        could_sell = self.signal_events.sell(self.product_code, candle.time, candle.close, 1.0, save=False)
+        could_sell = self.signal_events.sell(self.product_code, candle.time, sum_price / units, units, save=True)
         return could_sell
 
-    if self.start_trade > candle.time:
-        logger.warning('action=sell status=false error=old_time')
-        return False
 
-    trades = self.API.get_open_trade()
-    if not trades:
-        logger.error('Failed to fetch open trades.')
-        return False
-
-    sum_price = 0
-    units = 0
-    for trade in trades:
-        closed_trade = self.API.trade_close(trade['trade_id'])
-        sum_price += closed_trade['price'] * abs(closed_trade['units'])
-        units += abs(closed_trade['units'])
-
-    could_sell = self.signal_events.sell(self.product_code, candle.time, sum_price / units, units, save=True)
-    return could_sell
-
-
-def trade(self):
-    logger.info('action=trade status=run')
-    if self.optimized_trade_params is None:
-        self.update_optimize_params(False)
+    def trade(self):
+        logger.info('action=trade status=run')
         if self.optimized_trade_params is None:
-            logger.warning("Optimized trade parameters are still not set after update.")
-            return
+            self.update_optimize_params(False)
+            if self.optimized_trade_params is None:
+                logger.warning("Optimized trade parameters are still not set after update.")
+                return
 
-    df = DataFrameCandle(self.product_code, self.duration)
-    df.set_all_candles(self.past_period)
+        df = DataFrameCandle(self.product_code, self.duration)
+        df.set_all_candles(self.past_period)
 
-    action = determine_trade_action(df, self.optimized_trade_params)
-    if action:
-        execute_trade_action(action, df.candles[-1], self)
+        action = determine_trade_action(df, self.optimized_trade_params)
+        if action:
+            execute_trade_action(action, df.candles[-1], self)
 
