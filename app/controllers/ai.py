@@ -166,7 +166,6 @@ class AI(object):
             "Content-Type": "application/json"
         }
 
-
     def buy(self, candle):
         if self.back_test:
             could_buy = self.signal_events.buy(self.product_code, candle.time, candle.close, 1.0, save=False)
@@ -176,9 +175,10 @@ class AI(object):
             logger.warning('action=buy status=false error=old_time')
             return False
 
+        # 証拠金チェックを追加
         balance = self.API.get_balance()
-        if not balance:
-            logger.error('Failed to retrieve balance.')
+        if not balance or balance['available'] < candle.close * self.use_percent:
+            logger.warning('Insufficient trading margin. Buy order cannot be executed.')
             return False
 
         units = int(balance['available'] * self.use_percent)
@@ -190,6 +190,7 @@ class AI(object):
             "price": candle.close
         })
 
+        # リクエスト送信
         path = "/v1/order"
         headers = self.create_headers("POST", path, req_body)
         res = requests.post(settings.api_url + path, headers=headers, data=req_body)
@@ -199,16 +200,12 @@ class AI(object):
         could_buy = self.signal_events.buy(self.product_code, candle.time, candle.close, units, save=True)
         return could_buy
 
-
     def sell(self, candle):
         if self.back_test:
             could_sell = self.signal_events.sell(self.product_code, candle.time, candle.close, 1.0, save=False)
             return could_sell
 
-        if self.start_trade > candle.time:
-            logger.warning('action=sell status=false error=old_time')
-            return False
-
+        # sell関数では証拠金チェックをスキップし、即時にポジションを決済
         trades = self.API.get_open_trade()
         if not trades:
             logger.error('Failed to fetch open trades.')
@@ -223,7 +220,6 @@ class AI(object):
 
         could_sell = self.signal_events.sell(self.product_code, candle.time, sum_price / units, units, save=True)
         return could_sell
-
 
     def trade(self):
         logger.info('action=trade status=run')
