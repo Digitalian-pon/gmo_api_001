@@ -4,7 +4,6 @@ import talib
 from app.models.candle import factory_candle_class
 from app.models.dfcandle import DataFrameCandle
 from app.models.events import SignalEvents
-from gmocoin.gmocoin import APIClient
 import constants
 import settings
 import requests
@@ -13,6 +12,7 @@ import hmac
 import hashlib
 import time
 import logging
+from gmocoin.api_client import APIClient  # 修正: 正しいパスからインポート
 
 # ログ設定
 logger = logging.getLogger(__name__)
