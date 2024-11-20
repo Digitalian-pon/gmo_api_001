@@ -221,18 +221,21 @@ class AI(object):
         could_sell = self.signal_events.sell(self.product_code, candle.time, sum_price / units, units, save=True)
         return could_sell
 
-    def trade(self):
-        logger.info('action=trade status=run')
-        if self.optimized_trade_params is None:
-            self.update_optimize_params(False)
-            if self.optimized_trade_params is None:
-                logger.warning("Optimized trade parameters are still not set after update.")
-                return
+    def trade(self, ticker: dict, ai: 'AI'):
+        logger.info(f'action=trade ticker={ticker}')
+        ticker_time = datetime.fromisoformat(ticker['timestamp'].replace('Z', '+00:00')).astimezone(JST)
+        current_time = datetime.now(JST)
+        time_diff = abs((current_time - ticker_time).total_seconds())
 
-        df = DataFrameCandle(self.product_code, self.duration)
-        df.set_all_candles(self.past_period)
+        if time_diff > 5:  # 5秒以上のデータは無視
+            logger.error(
+                f"Timestamp out of sync: current_time={current_time}, ticker_time={ticker_time}, diff={time_diff} seconds")
+            return
 
-        action = determine_trade_action(df, self.optimized_trade_params)
-        if action:
-            execute_trade_action(action, df.candles[-1], self)
+        logger.info(f'ticker_time in JST: {ticker_time}')
+        for duration in constants.DURATIONS:
+            is_created = create_candle_with_duration(ticker['product_code'], duration, ticker)
+            if is_created and duration == settings.trade_duration:
+                thread = Thread(target=self._trade, args=(ai,))
+                thread.start()
 
